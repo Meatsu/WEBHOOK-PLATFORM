@@ -1,0 +1,9 @@
+{
+	"mcpServers": {
+		"my-mcp-server-ec02ef66": {
+			"url": "https://app.eraser.io/api/mcp",
+			"type": "http"
+		},
+		"inputs": []
+	}
+}
