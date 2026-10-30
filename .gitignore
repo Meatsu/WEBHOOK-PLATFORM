@@ -2,5 +2,32 @@ node_modules/
 .env
 .env.*
 !.env.example
+# Build outputs (Never commit)
 dist/
 build/
+
+# Local AI Agent data and caches (Usually contains local logs/history)
+.agents/
+
+# Local secrets and credentials
+secrets/
+credentials/
+.secrets/
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Local logs may contain sensitive data
+logs/
+*.log
+
+# Postman environments can contain API tokens and credentials
+postman/environments/
+
+# IDE/Tool specific configurations
+# (Optional: Commit if sharing custom workspace rules, ignore if they contain local paths/keys)
+.windsurf/
+.claude/

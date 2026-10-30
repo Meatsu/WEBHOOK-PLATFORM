@@ -1,0 +1,16 @@
+$kind: http-request
+url: "{{baseUrl}}/auth/logout"
+method: POST
+headers:
+  Authorization: Bearer {{accessToken}}
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test('Logout revokes the token session', function () {
+        pm.response.to.have.status(200);
+      });
+      if (pm.response.status === 200) {
+        pm.collectionVariables.unset('accessToken');
+      }
+    language: text/javascript
+order: 3000

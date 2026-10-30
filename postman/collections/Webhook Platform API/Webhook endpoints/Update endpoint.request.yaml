@@ -1,0 +1,16 @@
+$kind: http-request
+url: "{{baseUrl}}/webhooks/{{webhookId}}"
+method: PATCH
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "name": "Updated deployment events"
+    }
+auth:
+  type: bearer
+  credentials:
+    token: "{{accessToken}}"
+order: 4000

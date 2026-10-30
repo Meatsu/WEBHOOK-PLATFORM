@@ -1,0 +1,8 @@
+$kind: http-request
+url: "{{baseUrl}}/webhooks/{{webhookId}}"
+method: DELETE
+auth:
+  type: bearer
+  credentials:
+    token: "{{accessToken}}"
+order: 5000

@@ -1,18 +1,7 @@
-import 'dotenv/config';
+import app from './app';
 
-import express from 'express';
-import authRoutes from './routes/auth-routes';
+const port = process.env.PORT || 3000;
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.json());
-app.use('/api/auth', authRoutes);
-
-const startServer = (): void => {
-    app.listen(PORT, () => {
-        console.log(`Server is running on port ${PORT}`);
-    });
-};
-
-startServer();
+app.listen(port, () => {
+    console.log(`Server is running on port ${port}`);
+});

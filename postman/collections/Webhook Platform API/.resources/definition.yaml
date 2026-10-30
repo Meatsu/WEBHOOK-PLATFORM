@@ -1,0 +1,8 @@
+$kind: collection
+description: Auth and user-owned webhook endpoint CRUD. Register or log in first; tokens are saved automatically for protected requests.
+variables:
+  baseUrl: http://localhost:3000/api
+  email: developer@example.com
+  password: Example-Strong-Password-2026
+  webhookId: ""
+  accessToken: ""

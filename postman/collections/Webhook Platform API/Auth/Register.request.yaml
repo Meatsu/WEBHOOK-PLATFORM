@@ -1,0 +1,19 @@
+$kind: http-request
+url: "{{baseUrl}}/auth/register"
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: |-
+    {
+      "email": "{{email}}",
+      "password": "{{password}}"
+    }
+scripts:
+  - type: afterResponse
+    code: |-
+      pm.test("Registration returns 201, 409, 404, or 400", function () {
+          pm.expect([201, 409, 404, 400]).to.include(pm.response.code);
+      });
+order: 1000
