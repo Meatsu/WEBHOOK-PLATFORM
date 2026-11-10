@@ -3,11 +3,6 @@ import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import type { IncomingMessage, RequestOptions } from 'node:http';
-import type { Prisma } from '../../../generated/prisma/client';
-import type { DeliveryStatus } from '../../../generated/prisma/enums';
-import { ApiError } from '../../middleware/error-handler';
-import { prisma } from '../../infrastructure/database/prisma';
-import { findWebhook } from './webhook.repository';
 
 const requestTimeoutMs = 8_000;
 const responseLimitBytes = 4_096;
@@ -45,7 +40,6 @@ addSubnets(blockedAddresses, [
 addSubnets(blockedAddresses, [
     '::/128',
     '::1/128',
-    '::ffff:0:0/96',
     '64:ff9b::/96',
     '100::/64',
     '2001::/23',
@@ -59,7 +53,7 @@ addSubnets(blockedAddresses, [
 const allowedIpv6Addresses = new BlockList();
 allowedIpv6Addresses.addSubnet('2000::', 3, 'ipv6');
 
-const isPublicAddress = (address: string, family: number) => {
+export const isPublicAddress = (address: string, family: number) => {
     if (family === 4) {
         return !blockedAddresses.check(address, 'ipv4');
     }
@@ -67,6 +61,12 @@ const isPublicAddress = (address: string, family: number) => {
         allowedIpv6Addresses.check(address, 'ipv6') &&
         !blockedAddresses.check(address, 'ipv6');
 };
+
+export const hasOnlyPublicAddresses = (
+    addresses: readonly { address: string; family: number }[]
+) =>
+    addresses.length > 0 &&
+    addresses.every((entry) => isPublicAddress(entry.address, entry.family));
 
 const readResponse = (response: IncomingMessage): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -97,7 +97,7 @@ const sendRequest = (
         const body = JSON.stringify(payload);
         const options: RequestOptions = {
             protocol: url.protocol,
-            hostname: url.hostname,
+            hostname: url.hostname.replace(/^\[|\]$/g, ''),
             port: url.port || undefined,
             path: `${url.pathname}${url.search}`,
             method: 'POST',
@@ -116,96 +116,86 @@ const sendRequest = (
         const request = transport(options, async (response) => {
             try {
                 const responseBody = await readResponse(response);
+                clearTimeout(totalTimeout);
                 resolve({ status: response.statusCode ?? 0, body: responseBody });
             } catch (error) {
+                clearTimeout(totalTimeout);
                 reject(error);
             }
         });
+        const totalTimeout = setTimeout(
+            () => request.destroy(new Error('Request timed out.')),
+            requestTimeoutMs
+        );
         request.on('timeout', () => request.destroy(new Error('Request timed out.')));
-        request.on('error', reject);
+        request.on('error', (error) => {
+            clearTimeout(totalTimeout);
+            reject(error);
+        });
         request.end(body);
     });
 
 const getErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : 'Delivery request failed.';
 
-export const deliverTestEvent = async (
-    userId: string,
-    webhookId: string,
-    payload: Prisma.InputJsonValue
-) => {
-    const webhook = await findWebhook(webhookId, userId);
-    if (!webhook) {
-        throw new ApiError(404, 'Webhook endpoint not found.');
+export class DeliveryRequestError extends Error {
+    constructor(message: string, public readonly retryable: boolean) {
+        super(message);
+        this.name = 'DeliveryRequestError';
+    }
+}
+
+export const attemptWebhookDelivery = async (
+    targetUrl: string,
+    deliveryId: string,
+    payload: unknown
+): Promise<{ status: number; body: string }> => {
+    let url: URL;
+    try {
+        url = new URL(targetUrl);
+    } catch {
+        throw new DeliveryRequestError('The endpoint URL is invalid.', false);
     }
 
-    const delivery = await prisma.delivery.create({
-        data: {
-            userId,
-            webhookId: webhook.id,
-            endpointName: webhook.name,
-            targetUrl: webhook.targetUrl,
-            payload
-        }
-    });
-    const startedAt = Date.now();
-    let update: {
-        status: DeliveryStatus;
-        responseStatus?: number;
-        responseBody?: string;
-        error?: string;
-        durationMs: number;
-    };
+    if (
+        !['http:', 'https:'].includes(url.protocol) ||
+        url.username ||
+        url.password ||
+        (url.port && url.port !== (url.protocol === 'https:' ? '443' : '80'))
+    ) {
+        throw new DeliveryRequestError(
+            'Only public HTTP(S) endpoints on standard ports are allowed.',
+            false
+        );
+    }
+
+    let addresses: { address: string; family: number }[];
+    try {
+        const hostname = url.hostname.replace(/^\[|\]$/g, '');
+        const family = isIP(hostname);
+        addresses = family
+            ? [{ address: hostname, family }]
+            : await lookup(hostname, { all: true, verbatim: true });
+    } catch (error) {
+        throw new DeliveryRequestError(getErrorMessage(error).slice(0, 500), true);
+    }
+
+    if (!hasOnlyPublicAddresses(addresses)) {
+        throw new DeliveryRequestError(
+            'The endpoint must resolve only to public IP addresses.',
+            false
+        );
+    }
 
     try {
-        const url = new URL(webhook.targetUrl);
-        if (
-            !['http:', 'https:'].includes(url.protocol) ||
-            url.username ||
-            url.password ||
-            (url.port && url.port !== (url.protocol === 'https:' ? '443' : '80'))
-        ) {
-            throw new Error('Only public HTTP(S) endpoints on standard ports are allowed.');
-        }
-
-        const address = isIP(url.hostname)
-            ? [{ address: url.hostname, family: isIP(url.hostname) }]
-            : await lookup(url.hostname, { all: true, verbatim: true });
-
-        if (address.length === 0 || address.some((entry) =>
-            !isPublicAddress(entry.address, entry.family)
-        )) {
-            throw new Error('The endpoint must resolve only to public IP addresses.');
-        }
-
-        const response = await sendRequest(
+        return await sendRequest(
             url,
-            address[0].address,
-            address[0].family,
-            delivery.id,
+            addresses[0].address,
+            addresses[0].family,
+            deliveryId,
             payload
         );
-        update = {
-            status: response.status >= 200 && response.status < 300
-                ? 'SUCCEEDED'
-                : 'FAILED',
-            responseStatus: response.status,
-            responseBody: response.body.slice(0, responseLimitBytes),
-            error: response.status >= 300
-                ? `Endpoint returned HTTP ${response.status}.`
-                : undefined,
-            durationMs: Date.now() - startedAt
-        };
     } catch (error) {
-        update = {
-            status: 'FAILED',
-            error: getErrorMessage(error).slice(0, 500),
-            durationMs: Date.now() - startedAt
-        };
+        throw new DeliveryRequestError(getErrorMessage(error).slice(0, 500), true);
     }
-
-    return prisma.delivery.update({
-        where: { id: delivery.id },
-        data: update
-    });
 };

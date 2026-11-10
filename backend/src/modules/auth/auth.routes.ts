@@ -40,4 +40,19 @@ export default router;
   "password": "Lego@0825678"
 }
 
+Priority 1
+Essential for Weeks 1–2
+- understand-code
+- build-react-ui
+- build-rest-api
+- integrate-frontend-backend
+- manage-database
+
+
+Priority 2
+Essential for Week 3
+- implement-background-jobs
+- test-webhook-delivery
+- debug-backend
+
 */

@@ -55,6 +55,12 @@ enum DeliveryStatus {
   FAILED
 }
 
+enum DeliveryAttemptStatus {
+  STARTED
+  SUCCEEDED
+  FAILED
+}
+
 model Delivery {
   id             String         @id @default(uuid()) @db.Uuid
   userId         String         @db.Uuid
@@ -67,11 +73,29 @@ model Delivery {
   responseBody   String?        @db.VarChar(4096)
   error           String?        @db.VarChar(500)
   durationMs      Int            @default(0)
+  retryGeneration Int            @default(0)
   createdAt       DateTime       @default(now())
 
   user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   webhook Webhook? @relation(fields: [webhookId], references: [id], onDelete: SetNull)
+  attempts DeliveryAttempt[]
 
   @@index([userId, createdAt])
   @@index([webhookId, createdAt])
+}
+
+model DeliveryAttempt {
+  id             String                @id @default(uuid()) @db.Uuid
+  deliveryId     String                @db.Uuid
+  attemptNumber  Int
+  status         DeliveryAttemptStatus @default(STARTED)
+  responseStatus Int?
+  responseBody   String?               @db.VarChar(4096)
+  error          String?               @db.VarChar(500)
+  durationMs     Int                   @default(0)
+  createdAt      DateTime              @default(now())
+
+  delivery Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId, attemptNumber])
 }

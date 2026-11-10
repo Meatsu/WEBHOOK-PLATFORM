@@ -5,18 +5,22 @@ import { EmptyState, PageHeading, PanelHeading, StatusBadge, panelClass } from '
 type EventHistoryPageProps = {
   events: Delivery[]
   selectedEvent: DeliveryDetail | null
+  busy: boolean
   onView: (view: View) => void
   onRefresh: () => void
   onShowEvent: (id: string) => void
+  onRetry: (id: string) => void
   onCloseDetails: () => void
 }
 
 export function EventHistoryPage({
   events,
   selectedEvent,
+  busy,
   onView,
   onRefresh,
   onShowEvent,
+  onRetry,
   onCloseDetails,
 }: EventHistoryPageProps) {
   return (
@@ -40,13 +44,14 @@ export function EventHistoryPage({
           <div className="overflow-x-auto">
             <table className="w-full min-w-[690px] border-collapse text-left">
               <thead className="bg-slate-50 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                <tr><th className="px-5 py-3">Status</th><th className="px-5 py-3">Endpoint</th><th className="px-5 py-3">HTTP</th><th className="px-5 py-3">Duration</th><th className="px-5 py-3">Time</th><th className="px-5 py-3" /></tr>
+                <tr><th className="px-5 py-3">Status</th><th className="px-5 py-3">Endpoint</th><th className="px-5 py-3">Attempts</th><th className="px-5 py-3">HTTP</th><th className="px-5 py-3">Duration</th><th className="px-5 py-3">Time</th><th className="px-5 py-3" /></tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs text-slate-500">
                 {events.map((event) => (
                   <tr className="cursor-pointer hover:bg-violet-50/40" key={event.id} onClick={() => onShowEvent(event.id)}>
                     <td className="px-5 py-3"><StatusBadge status={event.status} /></td>
                     <td className="px-5 py-3 font-semibold text-slate-700">{event.endpointName}</td>
+                    <td className="px-5 py-3">{event.attemptCount}</td>
                     <td className="px-5 py-3">{event.responseStatus || '—'}</td>
                     <td className="px-5 py-3">{event.durationMs} ms</td>
                     <td className="px-5 py-3 whitespace-nowrap">{dateLabel(event.createdAt)}</td>
@@ -69,7 +74,10 @@ export function EventHistoryPage({
               <h2 className="mt-2 flex flex-wrap items-center gap-2 font-display text-base font-bold text-slate-800">{selectedEvent.endpointName}<StatusBadge status={selectedEvent.status} /></h2>
               <p className="mt-1 text-xs text-slate-500">{dateLabel(selectedEvent.createdAt)} · {selectedEvent.durationMs} ms · {selectedEvent.responseStatus ? `HTTP ${selectedEvent.responseStatus}` : 'No response'}</p>
             </div>
-            <button className="grid size-8 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" onClick={onCloseDetails} aria-label="Close event details">×</button>
+            <div className="flex items-center gap-2">
+              {selectedEvent.status === 'FAILED' && <button className="rounded-lg bg-violet-600 px-3 py-2 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60" disabled={busy} onClick={() => onRetry(selectedEvent.id)}>{busy ? 'Queueing…' : 'Retry delivery'}</button>}
+              <button className="grid size-8 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50" onClick={onCloseDetails} aria-label="Close event details">×</button>
+            </div>
           </div>
 
           <div className="mt-4 grid gap-1 border-y border-slate-100 py-3">
@@ -77,6 +85,21 @@ export function EventHistoryPage({
             <code className="break-all text-xs text-slate-600">{selectedEvent.targetUrl}</code>
           </div>
           {selectedEvent.error && <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{selectedEvent.error}</div>}
+
+          <div className="mt-4">
+            <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-400">Attempt history</h3>
+            <ol className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+              {selectedEvent.attempts.map((attempt) => (
+                <li className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs" key={attempt.id}>
+                  <span className="font-semibold text-slate-700">Attempt {attempt.attemptNumber}</span>
+                  <span className="text-slate-500">{attempt.status.toLowerCase()} · {attempt.responseStatus ? `HTTP ${attempt.responseStatus}` : 'No response'} · {attempt.durationMs} ms · {dateLabel(attempt.createdAt)}</span>
+                  {attempt.error && <span className="w-full text-rose-700">{attempt.error}</span>}
+                  {attempt.responseBody && <pre className="max-h-32 w-full overflow-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-[11px] text-slate-600">{attempt.responseBody}</pre>}
+                </li>
+              ))}
+              {!selectedEvent.attempts.length && <li className="px-3 py-2 text-xs text-slate-500">Waiting for the first worker attempt.</li>}
+            </ol>
+          </div>
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <CodeBlock title="Request payload" value={JSON.stringify(selectedEvent.payload, null, 2)} />

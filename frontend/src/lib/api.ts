@@ -8,6 +8,11 @@ export async function request<T>(
   if (token) headers.set('Authorization', `Bearer ${token}`)
 
   const response = await fetch(path, { ...init, headers })
+  if (response.status === 401 && token) {
+    sessionStorage.removeItem('relay-token')
+    sessionStorage.removeItem('relay-user')
+    window.dispatchEvent(new Event('relay:unauthorized'))
+  }
   const result = await response.json() as {
     status?: boolean
     message?: string

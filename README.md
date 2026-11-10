@@ -25,10 +25,11 @@ postman/collections/       Postman API collection
 
 - Node.js and npm
 - PostgreSQL
+- Redis
 
 ## Configure and run the backend
 
-From `backend/`, copy `.env.example` to `.env` and set `DATABASE_URL` and a `JWT_SECRET` with at least 32 bytes. `PORT` defaults to `3000`; `TRUST_PROXY_HOPS` defaults to `0` and should only be changed to match the trusted reverse-proxy setup.
+From `backend/`, copy `.env.example` to `.env` and set `DATABASE_URL`, `REDIS_URL`, and a `JWT_SECRET` with at least 32 bytes. `PORT` defaults to `3000`; `TRUST_PROXY_HOPS` defaults to `0` and should match the exact trusted reverse-proxy hop count so rate limits use the client address accurately.
 
 ```sh
 cd backend
@@ -38,7 +39,13 @@ npm run db:migrate
 npm run dev
 ```
 
-The API runs at `http://localhost:3000` by default. For production, configure the environment and run `npm run db:deploy` before starting the backend. Production requests must use HTTPS.
+Start the API and worker in separate terminals from `backend/`:
+
+```sh
+npm run dev:worker
+```
+
+The API runs at `http://localhost:3000` by default. For production, configure the environment and run `npm run db:deploy` before starting the backend; run `npm run start` and `npm run worker` as separate processes. Production requests must use HTTPS.
 
 ## Run the frontend
 
@@ -79,7 +86,7 @@ All routes below require authentication and only access endpoints owned by the c
 | GET | `/api/webhooks/:id` | Get one endpoint |
 | PATCH | `/api/webhooks/:id` | Update `name` and/or `targetUrl` |
 | DELETE | `/api/webhooks/:id` | Delete an endpoint |
-| POST | `/api/webhooks/:id/test-events` | Send a JSON test payload to an endpoint |
+| POST | `/api/webhooks/:id/test-events` | Queue a JSON test payload for delivery (202 Accepted) |
 
 Test-event request body:
 
@@ -92,16 +99,17 @@ Test-event request body:
 }
 ```
 
-The payload must be a JSON object. Test events are rate limited to 10 requests per minute per client. Delivery requests are sent to public HTTP(S) destinations on standard ports, with an 8-second timeout and a response body limit of 4 KB. Private and local network addresses are blocked. Each attempt is recorded, including failures.
+The payload must be a JSON object. Test events are rate limited to 10 requests per minute per client. The API records each event as pending and enqueues it in BullMQ; the separate worker sends the request to public HTTP(S) destinations on standard ports. The worker periodically reconciles pending database records with Redis so an API/worker restart does not leave an event unpublished. Private, local, and reserved addresses are blocked, and every resolved DNS address must be public. Requests have an 8-second timeout, a 4 KB response-body limit, and at most three total attempts with exponential backoff for network errors, HTTP 408/425/429, and HTTP 5xx responses.
 
 ### Delivery history
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/api/events` | List up to the latest 100 deliveries for the current user |
-| GET | `/api/events/:id` | Get delivery details, including payload and endpoint response |
+| GET | `/api/events/:id` | Get delivery details, payload, response, and all attempt records |
+| POST | `/api/events/:id/retry` | Manually queue a failed delivery again (202 Accepted; 10 requests/minute) |
 
-Delivery statuses are `PENDING`, `SUCCEEDED`, and `FAILED`. History is retained when its webhook endpoint is deleted; the endpoint reference is cleared while the stored endpoint name and target URL remain in the delivery record.
+Delivery statuses are `PENDING`, `SUCCEEDED`, and `FAILED`. HTTP 4xx responses other than 408, 425, and 429 are not retried automatically. Only failed deliveries can be manually retried. Delivery is at-least-once: a worker crash after the receiver accepts a request but before the database records the response can result in a duplicate request. Retries reuse the `X-Webhook-Delivery-Id` header, which receivers can use as an idempotency key. The event history shows each attempt and response. History is retained when its webhook endpoint is deleted; the endpoint reference is cleared while the stored endpoint name and target URL remain in the delivery record.
 
 ## Postman
 

@@ -16,6 +16,14 @@ const initialPayload = `{
   }
 }`
 
+const fetchDashboardData = async (activeToken: string) => {
+  const [endpointData, eventData] = await Promise.all([
+    request<Endpoint[]>('/api/webhooks', activeToken),
+    request<Delivery[]>('/api/events', activeToken),
+  ])
+  return { endpointData, eventData }
+}
+
 function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('relay-token') || '')
   const [user, setUser] = useState<User | null>(() => {
@@ -26,7 +34,7 @@ function App() {
   const [endpoints, setEndpoints] = useState<Endpoint[]>([])
   const [events, setEvents] = useState<Delivery[]>([])
   const [selectedEvent, setSelectedEvent] = useState<DeliveryDetail | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(() => Boolean(sessionStorage.getItem('relay-token')))
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
@@ -40,13 +48,8 @@ function App() {
   const [payload, setPayload] = useState(initialPayload)
 
   const loadData = useCallback(async (activeToken: string) => {
-    setLoading(true)
-    setError('')
     try {
-      const [endpointData, eventData] = await Promise.all([
-        request<Endpoint[]>('/api/webhooks', activeToken),
-        request<Delivery[]>('/api/events', activeToken),
-      ])
+      const { endpointData, eventData } = await fetchDashboardData(activeToken)
       setEndpoints(endpointData)
       setEvents(eventData)
       setSelectedEndpoint((current) => current || endpointData[0]?.id || '')
@@ -58,8 +61,61 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (token) void loadData(token)
-  }, [token, loadData])
+    if (!token) return
+    let cancelled = false
+    const loadInitialData = async () => {
+      try {
+        const { endpointData, eventData } = await fetchDashboardData(token)
+        if (cancelled) return
+        setEndpoints(endpointData)
+        setEvents(eventData)
+        setSelectedEndpoint((current) => current || endpointData[0]?.id || '')
+      } catch (caught) {
+        if (!cancelled) {
+          setError(caught instanceof Error ? caught.message : 'Could not load dashboard data.')
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void loadInitialData()
+    return () => {
+      cancelled = true
+    }
+  }, [token])
+
+  useEffect(() => {
+    const clearSession = () => {
+      setToken('')
+      setUser(null)
+      setEndpoints([])
+      setEvents([])
+      setSelectedEvent(null)
+      setLoading(false)
+    }
+    window.addEventListener('relay:unauthorized', clearSession)
+    return () => window.removeEventListener('relay:unauthorized', clearSession)
+  }, [])
+
+  useEffect(() => {
+    if (!token || !events.some((event) => event.status === 'PENDING')) return
+    const timer = window.setInterval(() => void loadData(token), 3_000)
+    return () => window.clearInterval(timer)
+  }, [token, events, loadData])
+
+  useEffect(() => {
+    if (!token || !selectedEvent || selectedEvent.status !== 'PENDING') return
+    const timer = window.setInterval(() => {
+      void request<DeliveryDetail>(`/api/events/${selectedEvent.id}`, token)
+        .then((detail) => {
+          setSelectedEvent((current) => current?.id === detail.id ? detail : current)
+        })
+        .catch((caught: unknown) => {
+          setError(caught instanceof Error ? caught.message : 'Could not refresh event details.')
+        })
+    }, 3_000)
+    return () => window.clearInterval(timer)
+  }, [token, selectedEvent, setError])
 
   const successfulCount = useMemo(
     () => events.filter((event) => event.status === 'SUCCEEDED').length,
@@ -77,6 +133,7 @@ function App() {
       })
       sessionStorage.setItem('relay-token', result.token)
       sessionStorage.setItem('relay-user', JSON.stringify(result.user))
+      setLoading(true)
       setToken(result.token)
       setUser(result.user)
     } catch (caught) {
@@ -99,6 +156,7 @@ function App() {
     setEndpoints([])
     setEvents([])
     setSelectedEvent(null)
+    setLoading(false)
   }
 
   const saveEndpoint = async (event: FormEvent<HTMLFormElement>) => {
@@ -180,15 +238,41 @@ function App() {
       )
       setNotice(delivery.status === 'SUCCEEDED'
         ? `Delivered successfully in ${delivery.durationMs} ms.`
-        : 'The delivery failed. Open the event to inspect the response.')
+        : delivery.status === 'FAILED'
+          ? 'The delivery failed. Open the event to inspect the response.'
+          : 'Delivery queued. Waiting for the worker response.')
       await loadData(token)
       setView('events')
       await showEvent(delivery.id)
     } catch (caught) {
+      await loadData(token)
       setError(caught instanceof Error ? caught.message : 'Could not send test event.')
     } finally {
       setBusy(false)
     }
+  }
+
+  const retryEvent = async (id: string) => {
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await request<DeliveryDetail>(`/api/events/${id}/retry`, token, { method: 'POST' })
+      setNotice('Delivery queued for retry.')
+      await loadData(token)
+      await showEvent(id)
+    } catch (caught) {
+      await loadData(token)
+      setError(caught instanceof Error ? caught.message : 'Could not retry delivery.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const refreshData = () => {
+    setError('')
+    setLoading(true)
+    void loadData(token)
   }
 
   if (!token) {
@@ -220,7 +304,7 @@ function App() {
       loading={loading}
       onDismissError={() => setError('')}
       onDismissNotice={() => setNotice('')}
-      onRefresh={() => void loadData(token)}
+      onRefresh={refreshData}
       onLogout={() => void logout()}
     >
       {view === 'overview' && (
@@ -271,9 +355,11 @@ function App() {
         <EventHistoryPage
           events={events}
           selectedEvent={selectedEvent}
+          busy={busy}
           onView={setView}
-          onRefresh={() => void loadData(token)}
+          onRefresh={refreshData}
           onShowEvent={(id) => void showEvent(id)}
+          onRetry={(id) => void retryEvent(id)}
           onCloseDetails={() => setSelectedEvent(null)}
         />
       )}

@@ -25,6 +25,18 @@ test('webhook URLs must use HTTP or HTTPS', () => {
     }).success, false);
 });
 
+test('webhook URLs reject credentials and non-standard ports', () => {
+    for (const targetUrl of [
+        'https://user:secret@hooks.example.com/deploy',
+        'http://hooks.example.com:8080/deploy'
+    ]) {
+        assert.equal(createWebhookSchema.safeParse({
+            name: 'Deploy events',
+            targetUrl
+        }).success, false);
+    }
+});
+
 test('webhook updates require a valid UUID and at least one valid field', () => {
     assert.equal(webhookIdSchema.safeParse({
         id: 'not-a-uuid'

@@ -14,6 +14,18 @@ export type Delivery = {
   responseStatus: number | null
   durationMs: number
   createdAt: string
+  attemptCount: number
+}
+
+export type DeliveryAttempt = {
+  id: string
+  attemptNumber: number
+  status: 'STARTED' | 'SUCCEEDED' | 'FAILED'
+  responseStatus: number | null
+  responseBody: string | null
+  error: string | null
+  durationMs: number
+  createdAt: string
 }
 
 export type DeliveryDetail = Delivery & {
@@ -21,6 +33,7 @@ export type DeliveryDetail = Delivery & {
   payload: Record<string, unknown>
   responseBody: string | null
   error: string | null
+  attempts: DeliveryAttempt[]
 }
 
 export type User = { id: string; email: string }

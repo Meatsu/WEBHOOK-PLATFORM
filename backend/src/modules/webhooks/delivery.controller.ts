@@ -1,7 +1,7 @@
 import type { Request, RequestHandler } from 'express';
 import { ApiError } from '../../middleware/error-handler';
 import { findDelivery, listDeliveries } from './delivery.repository';
-import { deliverTestEvent } from './webhook-delivery';
+import { queueTestDelivery, retryDelivery } from './delivery.service';
 import { createDeliverySchema, deliveryIdSchema } from './delivery.schemas';
 
 const getUserId = (req: Request): string => {
@@ -38,10 +38,20 @@ export const sendTestEvent: RequestHandler = async (req, res, next) => {
         return next(new ApiError(400, 'The event payload must be a JSON object.'));
     }
 
-    const delivery = await deliverTestEvent(
+    const delivery = await queueTestDelivery(
         getUserId(req),
         parsedId.data.id,
         parsedBody.data.payload
     );
-    return res.status(201).json({ status: true, data: delivery });
+    return res.status(202).json({ status: true, data: delivery });
+};
+
+export const retryEvent: RequestHandler = async (req, res, next) => {
+    const parsedId = deliveryIdSchema.safeParse(req.params);
+    if (!parsedId.success) {
+        return next(new ApiError(400, 'A valid event ID is required.'));
+    }
+
+    const delivery = await retryDelivery(parsedId.data.id, getUserId(req));
+    return res.status(202).json({ status: true, data: delivery });
 };
