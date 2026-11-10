@@ -1,86 +1,108 @@
 # Webhook Platform
 
-The backend is organized as a modular monolith: one deployable application with
-feature modules that own their HTTP routes, application logic, validation, and
-persistence access.
+Webhook Platform provides a React dashboard and an Express API for managing webhook endpoints, sending test events, and reviewing delivery history. The backend is a modular monolith backed by PostgreSQL and Prisma.
 
-## Backend layout
+## Project structure
 
 ```text
-backend/src/
-  app.ts                         HTTP app and module registration
-  server.ts                      Process entry point
-  infrastructure/database/       Shared Prisma client
-  modules/
-    auth/                        Authentication feature module
-      auth.routes.ts
-      auth.controller.ts
-      auth.service.ts
-      auth.repository.ts
-      auth.schemas.ts
-      auth.middleware.ts
-      auth.token.ts
-    webhooks/                    User-owned webhook endpoint CRUD
-      webhook.routes.ts
-      webhook.controller.ts
-      webhook.repository.ts
-      webhook.schemas.ts
+backend/
+  prisma/                 Prisma schema and database migrations
+  src/
+    app.ts                 Express app and API module registration
+    server.ts              API process entry point
+    infrastructure/        Shared database connection
+    middleware/            Shared HTTP error handling
+    modules/
+      auth/                Registration, login, logout, sessions
+      webhooks/            Endpoint CRUD and test event delivery/history
+frontend/
+  src/                     React dashboard
+  vite.config.ts           Local development proxy to the API
+postman/collections/       Postman API collection
 ```
 
-`app.ts` is the composition root: mount new feature modules there. A module
-should keep its internals private and expose only what the application needs
-(currently, the auth router). Feature code accesses the database through its
-own repository and the shared Prisma infrastructure; modules should not import
-another module's internal files directly.
+## Requirements
 
-## Run the backend
+- Node.js and npm
+- PostgreSQL
 
-From `backend/`, copy `.env.example` to `.env`, configure `DATABASE_URL` and a
-`JWT_SECRET` containing at least 32 bytes, then run:
+## Configure and run the backend
+
+From `backend/`, copy `.env.example` to `.env` and set `DATABASE_URL` and a `JWT_SECRET` with at least 32 bytes. `PORT` defaults to `3000`; `TRUST_PROXY_HOPS` defaults to `0` and should only be changed to match the trusted reverse-proxy setup.
 
 ```sh
-npm install
-npm run dev
-```
-
-The auth endpoints remain under `/api/auth` (`/register`, `/login`, and
-authenticated `/logout`). Access tokens are persisted as revocable sessions and
-expire after 15 minutes.
-
-## Database setup
-
-From `backend/`, configure `DATABASE_URL` and `JWT_SECRET` in `.env`, then run:
-
-```sh
+cd backend
 npm install
 npm run db:generate
 npm run db:migrate
 npm run dev
 ```
 
-For production deployments, run `npm run db:deploy` before starting the API.
+The API runs at `http://localhost:3000` by default. For production, configure the environment and run `npm run db:deploy` before starting the backend. Production requests must use HTTPS.
+
+## Run the frontend
+
+In a separate terminal, from `frontend/`:
+
+```sh
+cd frontend
+npm install
+npm run dev
+```
+
+Open the local URL printed by Vite (usually `http://localhost:5173`). The Vite development server forwards `/api` requests to `http://localhost:3000`; start the backend as well. The frontend also provides `npm run build`, `npm run lint`, and `npm run preview` scripts.
+
+The dashboard supports account registration and login, endpoint management, sending JSON test events, and viewing delivery history and response details. The access token and basic user data are kept in browser `sessionStorage` and cleared on logout.
 
 ## API
 
-All webhook routes require `Authorization: Bearer <access-token>`.
+All endpoints except registration and login require `Authorization: Bearer <access-token>`. Access tokens expire after 15 minutes and are persisted as revocable sessions. Request and API errors use `{ "status": false, "message": "..." }` responses.
+
+### Authentication
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/api/auth/register` | Register and receive an access token |
-| POST | `/api/auth/login` | Log in and receive an access token |
-| POST | `/api/auth/logout` | Revoke the current access-token session |
-| GET | `/api/webhooks` | List the authenticated user's webhook endpoints |
-| POST | `/api/webhooks` | Create an endpoint (`name`, `targetUrl`) |
-| GET | `/api/webhooks/:id` | Get one endpoint owned by the authenticated user |
-| PATCH | `/api/webhooks/:id` | Update its `name` and/or `targetUrl` |
-| DELETE | `/api/webhooks/:id` | Delete an endpoint owned by the authenticated user |
+| POST | `/api/auth/register` | Create an account and return the user and access token |
+| POST | `/api/auth/login` | Authenticate and return the user and access token |
+| POST | `/api/auth/logout` | Revoke the current session |
 
-Target URLs are stored as endpoint configuration; this API does not dispatch
-webhook requests. Resource lookups and mutations are scoped to the current user.
-Validation and API errors return a consistent `{ "status": false, "message":
-"..." }` response shape.
+Registration and login are rate limited. Registration requires a valid email and a password of at least 12 characters.
 
-Import `postman/collections/webhook-platform.postman_collection.json` in
-Postman. Its collection variables include the local API URL and example
-credentials; registration/login requests save the returned token for protected
-requests.
+### Webhook endpoints
+
+All routes below require authentication and only access endpoints owned by the current user.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/webhooks` | List the current user's endpoints |
+| POST | `/api/webhooks` | Create an endpoint with `name` and `targetUrl` |
+| GET | `/api/webhooks/:id` | Get one endpoint |
+| PATCH | `/api/webhooks/:id` | Update `name` and/or `targetUrl` |
+| DELETE | `/api/webhooks/:id` | Delete an endpoint |
+| POST | `/api/webhooks/:id/test-events` | Send a JSON test payload to an endpoint |
+
+Test-event request body:
+
+```json
+{
+  "payload": {
+    "event": "order.created",
+    "data": { "orderId": "ord_123" }
+  }
+}
+```
+
+The payload must be a JSON object. Test events are rate limited to 10 requests per minute per client. Delivery requests are sent to public HTTP(S) destinations on standard ports, with an 8-second timeout and a response body limit of 4 KB. Private and local network addresses are blocked. Each attempt is recorded, including failures.
+
+### Delivery history
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/events` | List up to the latest 100 deliveries for the current user |
+| GET | `/api/events/:id` | Get delivery details, including payload and endpoint response |
+
+Delivery statuses are `PENDING`, `SUCCEEDED`, and `FAILED`. History is retained when its webhook endpoint is deleted; the endpoint reference is cleared while the stored endpoint name and target URL remain in the delivery record.
+
+## Postman
+
+Import `postman/collections/webhook-platform.postman_collection.json` into Postman. The collection includes the local API URL and example credentials; registration and login requests save the returned token for authenticated requests.

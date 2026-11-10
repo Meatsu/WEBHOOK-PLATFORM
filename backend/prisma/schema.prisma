@@ -21,6 +21,7 @@ model User {
 
   sessions     Session[]
   webhooks     Webhook[]
+  deliveries   Delivery[]
 }
 
 model Session {
@@ -43,6 +44,34 @@ model Webhook {
   updatedAt DateTime @updatedAt
 
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
 
   @@index([userId, createdAt])
+}
+
+enum DeliveryStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+model Delivery {
+  id             String         @id @default(uuid()) @db.Uuid
+  userId         String         @db.Uuid
+  webhookId      String?        @db.Uuid
+  endpointName   String         @db.VarChar(100)
+  targetUrl      String         @db.VarChar(2048)
+  payload        Json
+  status         DeliveryStatus @default(PENDING)
+  responseStatus Int?
+  responseBody   String?        @db.VarChar(4096)
+  error           String?        @db.VarChar(500)
+  durationMs      Int            @default(0)
+  createdAt       DateTime       @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  webhook Webhook? @relation(fields: [webhookId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([webhookId, createdAt])
 }
